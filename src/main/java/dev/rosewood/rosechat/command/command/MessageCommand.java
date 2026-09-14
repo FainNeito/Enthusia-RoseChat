@@ -12,6 +12,7 @@ import dev.rosewood.rosegarden.command.framework.ArgumentsDefinition;
 import dev.rosewood.rosegarden.command.framework.CommandContext;
 import dev.rosewood.rosegarden.command.framework.CommandInfo;
 import dev.rosewood.rosegarden.command.framework.annotation.RoseExecutable;
+import dev.rosewood.rosegarden.utils.StringPlaceholders;
 import org.bukkit.entity.Player;
 
 public class MessageCommand extends RoseChatCommand {
@@ -59,25 +60,47 @@ public class MessageCommand extends RoseChatCommand {
             return;
         }
 
-        MessageUtils.sendPrivateMessage(player, messagePlayer.getRealName(), message);
-
-        if (player.isPlayer()) {
-            player.getPlayerData().setReplyTo(messagePlayer.getRealName());
-            player.getPlayerData().save();
+        // Cross-server delivery acknowledgements currently route back through ForwardToPlayer.
+        // Non-player senders have no valid return player, so keep them on the local-message path.
+        if (!player.isPlayer()
+                && target == null
+                && this.getAPI().isBungee()
+                && this.getAPI().getBungeeManager().getAllPlayers().contains(messagePlayer.getRealName())) {
+            player.sendLocaleMessage("invalid-argument",
+                    StringPlaceholders.of("message",
+                            this.getAPI().getLocaleManager().getLocaleMessage("argument-handler-player")));
+            return;
         }
 
-        if (this.getAPI().isBungee())
-            this.getAPI().getBungeeManager().sendUpdateReply(player.getRealName(), messagePlayer.getRealName());
+        // Capture the sender's data before asynchronous cross-server delivery completes. A player
+        // may disconnect before the acknowledgement arrives, at which point RosePlayer#isPlayer()
+        // becomes false even though the successfully delivered message should still update /r.
+        PlayerData senderData = player.isPlayer() ? player.getPlayerData() : null;
 
-        if (target == null)
-            return;
+        MessageUtils.sendPrivateMessage(player, messagePlayer.getRealName(), message, success -> {
+            if (!success)
+                return;
 
-        PlayerData targetData = this.getAPI().getPlayerData(target.getUniqueId());
-        if (targetData == null)
-            return;
+            if (senderData != null) {
+                senderData.setReplyTo(messagePlayer.getRealName());
+                senderData.save();
+            }
 
-        targetData.setReplyTo(player.getRealName());
-        targetData.save();
+            if (target == null) {
+                if (this.getAPI().isBungee()
+                        && this.getAPI().getBungeeManager().getAllPlayers().contains(messagePlayer.getRealName())) {
+                    this.getAPI().getBungeeManager().sendUpdateReply(player.getRealName(), messagePlayer.getRealName());
+                }
+                return;
+            }
+
+            PlayerData targetData = this.getAPI().getPlayerData(target.getUniqueId());
+            if (targetData == null)
+                return;
+
+            targetData.setReplyTo(player.getRealName());
+            targetData.save();
+        });
     }
 
 }
