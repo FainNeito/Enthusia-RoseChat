@@ -20,17 +20,9 @@ apply plugin: 'com.gradleup.shadow'
 group = 'dev.rosewood'
 version = 'RC-4'
 
-def lumaGuildsJar = file(System.getenv('LUMAGUILDS_JAR') ?: 'libs/LumaGuilds-2.1.0.jar')
-
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(21))
     disableAutoTargetJvm()
-}
-
-sourceSets {
-    lumaGuildsApi {
-        java.srcDir 'src/lumaGuildsApi/java'
-    }
 }
 
 compileJava {
@@ -53,7 +45,8 @@ repositories {
     maven { url = 'https://repo.glaremasters.me/repository/towny/' }
     maven { url = 'https://nexus.neetgames.com/repository/maven-releases/' }
     maven { url = 'https://maven.enginehub.org/repo/' }
-    maven { url = 'https://repo.roinujnosde.me/releases/' }
+    // SimpleClans 2.19.2 is consumed as a compile-only API from Modrinth Maven.
+    maven { url = 'https://api.modrinth.com/maven' }
     maven { url = 'https://ci.ender.zone/plugin/repository/everything/' }
     maven { url = 'https://repo.codemc.org/repository/maven-public/' }
     maven { url = 'https://repo.bg-software.com/repository/api/' }
@@ -64,8 +57,9 @@ repositories {
 }
 
 dependencies {
-    api 'dev.rosewood:rosegarden:1.5.4'
+    api 'dev.rosewood:rosegarden:1.5.7'
     api 'org.apache.commons:commons-text:1.12.0'
+    implementation 'com.google.code.gson:gson:2.11.0'
 
     compileOnly 'net.kyori:adventure-api:4.25.0'
     compileOnly 'net.md-5:bungeecord-chat:1.21-R0.5-20251216.193400-13'
@@ -86,7 +80,7 @@ dependencies {
         exclude group: 'org.bukkit'
     }
     compileOnly 'com.sk89q.worldedit:worldedit-bukkit:7.3.0'
-    compileOnly 'net.sacredlabyrinth.phaed.simpleclans:SimpleClans:2.19.2'
+    compileOnly 'maven.modrinth:quLDfyDl:xlIV342T' // SimpleClans 2.19.2
     compileOnly 'com.massivecraft:Factions:1.6.9.5-U0.6.29'
     compileOnly 'com.github.cryptomorin:kingdoms:1.16.3.3'
     compileOnly 'world.bentobox:bentobox:2.3.0-SNAPSHOT'
@@ -97,13 +91,8 @@ dependencies {
         exclude group: 'org.spigotmc'
     }
     compileOnly 'net.william278.husktowns:husktowns-bukkit:3.1.4'
-    // LumaGuilds is not publicly available on a Maven repo. Drop the built jar into
-    // libs/ from the LumaGuilds project (libs/ is gitignored).
-    if (lumaGuildsJar.isFile()) {
-        compileOnly files(lumaGuildsJar)
-    } else {
-        compileOnly sourceSets.lumaGuildsApi.output
-    }
+    // LumaGuilds 3.x registers its ChannelProvider dynamically at runtime.
+    // RoseChat intentionally has no compile-time dependency on LumaGuilds internals.
     compileOnly 'org.jetbrains.kotlin:kotlin-stdlib:2.0.0'
 
     testImplementation platform('org.junit:junit-bom:5.12.2')
@@ -127,9 +116,10 @@ processResources {
 }
 
 shadowJar {
-    archiveClassifier.set(null);
+    archiveClassifier.set(null)
     relocate('dev.rosewood.rosegarden', 'dev.rosewood.rosechat.lib.rosegarden')
     relocate('org.apache', 'dev.rosewood.rosechat.lib.apache')
+    relocate('com.google.gson', 'dev.rosewood.rosechat.lib.gson')
     minimize()
 }
 

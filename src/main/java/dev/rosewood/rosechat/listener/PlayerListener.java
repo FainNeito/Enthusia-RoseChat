@@ -2,20 +2,15 @@ package dev.rosewood.rosechat.listener;
 
 import dev.rosewood.rosechat.RoseChat;
 import dev.rosewood.rosechat.api.RoseChatAPI;
-import dev.rosewood.rosechat.api.event.PresenceMessageEvent;
 import dev.rosewood.rosechat.api.staff.PresenceType;
 import dev.rosewood.rosechat.chat.PlayerData;
 import dev.rosewood.rosechat.chat.channel.Channel;
 import dev.rosewood.rosechat.config.Settings;
 import dev.rosewood.rosechat.hook.channel.rosechat.GroupChannel;
 import dev.rosewood.rosechat.manager.ChannelManager;
-import dev.rosewood.rosechat.manager.JoinMessageManager;
-import dev.rosewood.rosechat.manager.LeaveMessageManager;
 import dev.rosewood.rosechat.manager.PlayerDataManager;
-import dev.rosewood.rosechat.message.contents.MessageContents;
-import dev.rosewood.rosechat.placeholder.CustomPlaceholder;
-import dev.rosewood.rosechat.placeholder.condition.PlaceholderCondition;
 import dev.rosewood.rosechat.message.RosePlayer;
+import dev.rosewood.rosechat.staff.PresenceMessageRenderer;
 import dev.rosewood.rosegarden.utils.NMSUtil;
 import dev.rosewood.rosegarden.utils.StringPlaceholders;
 import java.util.ArrayList;
@@ -95,40 +90,18 @@ public class PlayerListener implements Listener {
         event.setJoinMessage(null);
 
         // Broadcast custom join messages to all online players.
-        JoinMessageManager joinMessageManager = this.plugin.getManager(JoinMessageManager.class);
-        RoseChatAPI api = RoseChatAPI.getInstance();
-
-        StringPlaceholders emptyPlaceholders = StringPlaceholders.empty();
-
-        // Includes the joining player. Aggregate templates before replacement so
-        // one selected cosmetic cannot be repeated once per configured template.
         for (Player online : Bukkit.getOnlinePlayers()) {
             if (this.plugin.getStaffService() != null
                     && !this.plugin.getStaffService().canRenderPresence(
                             joiningPlayer.getUUID(), online.getUniqueId(), PresenceType.JOIN))
                 continue;
 
-            RosePlayer viewer = new RosePlayer(online);
-            List<String> defaults = new ArrayList<>();
-            for (CustomPlaceholder joinMessage : joinMessageManager.getJoinMessages()) {
-                PlaceholderCondition messageCondition = joinMessage.get("message");
-                if (messageCondition == null)
-                    continue;
-                List<String> lines = messageCondition.parseToStringList(joiningPlayer, viewer, emptyPlaceholders);
-                if (lines != null)
-                    defaults.addAll(lines);
-            }
-            if (defaults.isEmpty())
-                continue;
-            PresenceMessageEvent presence = new PresenceMessageEvent(event.getPlayer(), online, "join", defaults);
-            Bukkit.getPluginManager().callEvent(presence);
-            if (presence.isCancelled())
-                continue;
-            for (String line : presence.getLines()) {
-                MessageContents parsed = api.parse(joiningPlayer, viewer, line);
-                if (parsed != null)
-                    viewer.send(parsed);
-            }
+            PresenceMessageRenderer.render(
+                    this.plugin,
+                    joiningPlayer,
+                    new RosePlayer(online),
+                    PresenceType.JOIN
+            );
         }
 
         // Handle chat suggestions (MC 1.19+).
@@ -144,38 +117,18 @@ public class PlayerListener implements Listener {
         event.setQuitMessage(null);
 
         // Broadcast custom leave messages to all remaining online players.
-        LeaveMessageManager leaveMessageManager = this.plugin.getManager(LeaveMessageManager.class);
-        RoseChatAPI rcApi = RoseChatAPI.getInstance();
-
-        StringPlaceholders emptyPlaceholders = StringPlaceholders.empty();
-
         for (Player online : Bukkit.getOnlinePlayers()) {
             if (this.plugin.getStaffService() != null
                     && !this.plugin.getStaffService().canRenderPresence(
                             leavingPlayer.getUUID(), online.getUniqueId(), PresenceType.QUIT))
                 continue;
 
-            RosePlayer viewer = new RosePlayer(online);
-            List<String> defaults = new ArrayList<>();
-            for (CustomPlaceholder leaveMessage : leaveMessageManager.getLeaveMessages()) {
-                PlaceholderCondition messageCondition = leaveMessage.get("message");
-                if (messageCondition == null)
-                    continue;
-                List<String> lines = messageCondition.parseToStringList(leavingPlayer, viewer, emptyPlaceholders);
-                if (lines != null)
-                    defaults.addAll(lines);
-            }
-            if (defaults.isEmpty())
-                continue;
-            PresenceMessageEvent presence = new PresenceMessageEvent(event.getPlayer(), online, "quit", defaults);
-            Bukkit.getPluginManager().callEvent(presence);
-            if (presence.isCancelled())
-                continue;
-            for (String line : presence.getLines()) {
-                MessageContents parsed = rcApi.parse(leavingPlayer, viewer, line);
-                if (parsed != null)
-                    viewer.send(parsed);
-            }
+            PresenceMessageRenderer.render(
+                    this.plugin,
+                    leavingPlayer,
+                    new RosePlayer(online),
+                    PresenceType.QUIT
+            );
         }
 
         PlayerDataManager playerDataManager = this.plugin.getManager(PlayerDataManager.class);
