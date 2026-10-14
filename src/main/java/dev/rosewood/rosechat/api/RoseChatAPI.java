@@ -1,11 +1,18 @@
 package dev.rosewood.rosechat.api;
 
 import dev.rosewood.rosechat.RoseChat;
+import dev.rosewood.rosechat.api.chatbridge.InboundChatMessage;
+import dev.rosewood.rosechat.api.chatbridge.LegacyDiscordChatSuppression;
+import dev.rosewood.rosechat.api.chatbridge.OutboundChatBridge;
+import dev.rosewood.rosechat.api.chatbridge.OutboundChatBridgeCoordinator;
+import dev.rosewood.rosechat.api.chatbridge.OutboundChatRenderBridge;
+import dev.rosewood.rosechat.api.chatbridge.OutboundChatRenderBridgeCoordinator;
 import dev.rosewood.rosechat.api.deletion.AdventureMessageDeletionHelper;
 import dev.rosewood.rosechat.api.deletion.BungeeMessageDeletionHelper;
 import dev.rosewood.rosechat.api.deletion.MessageDeletionHelper;
 import dev.rosewood.rosechat.chat.PlayerData;
 import dev.rosewood.rosechat.chat.channel.Channel;
+import dev.rosewood.rosechat.chat.channel.ChannelMessageOptions;
 import dev.rosewood.rosechat.chat.filter.Filter;
 import dev.rosewood.rosechat.config.Settings;
 import dev.rosewood.rosechat.hook.channel.ChannelProvider;
@@ -39,6 +46,7 @@ import net.md_5.bungee.api.chat.BaseComponent;
 import net.md_5.bungee.api.chat.ComponentBuilder;
 import net.md_5.bungee.api.chat.HoverEvent;
 import net.milkbowl.vault.permission.Permission;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
 /**
@@ -375,6 +383,94 @@ public final class RoseChatAPI {
      */
     public DiscordChatProvider getDiscord() {
         return this.plugin.getDiscord();
+    }
+
+    /**
+     * Suppresses RoseChat's legacy Discord provider while an external transport is authoritative.
+     *
+     * <p>The suppression is lifecycle-scoped and reversible. Closing the returned registration
+     * restores the legacy send path when this registration still owns the suppression slot.</p>
+     *
+     * @return registration that releases this suppression
+     */
+    public LegacyDiscordChatSuppression.Registration suppressLegacyDiscordChat() {
+        return this.plugin.getLegacyDiscordChatSuppression().suppress();
+    }
+
+    /**
+     * @return {@code true} when RoseChat's legacy Discord provider is currently suppressed
+     */
+    public boolean isLegacyDiscordChatSuppressed() {
+        return this.plugin.getLegacyDiscordChatSuppression().suppressed();
+    }
+
+    /**
+     * Installs the single active provider-neutral outbound chat bridge.
+     *
+     * @param bridge bridge implementation owned by the external transport runtime
+     * @return registration that removes only this installation
+     */
+    public OutboundChatBridgeCoordinator.Registration installOutboundChatBridge(OutboundChatBridge bridge) {
+        return this.plugin.getOutboundChatBridgeCoordinator().install(bridge);
+    }
+
+    /**
+     * Installs the single active provider-neutral styled outbound chat renderer.
+     *
+     * <p>When installed, RoseChat may offer the resolved body/full-line render to this bridge
+     * instead of the plain V1 bridge. The render always contains a formatting-free fallback.</p>
+     *
+     * @param bridge styled render transport owned by an external runtime
+     * @return registration that removes only this installation
+     */
+    public OutboundChatRenderBridgeCoordinator.Registration installOutboundChatRenderBridge(
+            OutboundChatRenderBridge bridge
+    ) {
+        return this.plugin.getOutboundChatRenderBridgeCoordinator().install(bridge);
+    }
+
+    /**
+     * Re-enters an authenticated provider-neutral Discord message through RoseChat's existing
+     * Discord-to-Minecraft path.
+     *
+     * <p>This method must be called from the Bukkit primary thread. It deliberately creates a
+     * Discord-proxy sender and a wrapped {@link RoseMessage}; {@link Channel#send(ChannelMessageOptions)}
+     * then applies the existing Staff preflight and dispatches the message with
+     * {@code DISCORD_TO_MINECRAFT} direction, which prevents Discord echo.</p>
+     *
+     * @param message authenticated, explicitly routed Discord-origin message
+     * @return {@code true} when the message was offered to the target channel; {@code false} when
+     *         it was already expired or the configured logical channel does not exist
+     */
+    public boolean dispatchInboundChat(InboundChatMessage message) {
+        if (message == null) {
+            throw new IllegalArgumentException("inbound chat message is required");
+        }
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("inbound chat dispatch must run on the Bukkit primary thread");
+        }
+        if (message.isExpired(System.currentTimeMillis())) {
+            return false;
+        }
+
+        Channel channel = this.getChannelById(message.logicalChannelId());
+        if (channel == null) {
+            return false;
+        }
+
+        RosePlayer sender = new RosePlayer(message.displayName(), true);
+        RoseMessage wrapper = RoseMessage.forChannel(sender, channel);
+        wrapper.setUUID(message.eventId());
+        wrapper.setPlayerInput(message.plainText());
+        wrapper.setDiscordId(message.externalMessageId());
+
+        channel.send(new ChannelMessageOptions.Builder()
+                .sender(sender)
+                .message(message.plainText())
+                .discordId(message.externalMessageId())
+                .wrapper(wrapper)
+                .build());
+        return true;
     }
 
     /**

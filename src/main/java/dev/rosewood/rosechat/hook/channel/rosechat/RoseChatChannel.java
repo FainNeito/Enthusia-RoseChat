@@ -2,6 +2,8 @@ package dev.rosewood.rosechat.hook.channel.rosechat;
 
 import dev.rosewood.rosechat.RoseChat;
 import dev.rosewood.rosechat.api.RoseChatAPI;
+import dev.rosewood.rosechat.api.chatbridge.OutboundChatRenderBridgeCoordinator;
+import dev.rosewood.rosechat.api.staff.ChannelClassification;
 import dev.rosewood.rosechat.api.event.message.MessageReceivedEvent;
 import dev.rosewood.rosechat.api.event.message.PostParseMessageEvent;
 import dev.rosewood.rosechat.api.event.message.PreParseMessageEvent;
@@ -351,11 +353,145 @@ public class RoseChatChannel extends ConditionalChannel implements Spyable {
         });
     }
 
-    private void sendToDiscord(RoseMessage message, MessageDirection direction) {
-        if (direction == MessageDirection.SERVER_TO_SERVER && !this.getSettings().shouldSendBungeeToDiscord())
+    private void publishToOutboundBridge(
+            RoseMessage message,
+            MessageDirection direction,
+            String lineFormat
+    ) {
+        if (!shouldPublishOutboundBridge(direction, this.getSettings().shouldSendBungeeToDiscord()))
             return;
 
-        if (direction == MessageDirection.DISCORD_TO_MINECRAFT || direction == MessageDirection.SERVER_TO_SERVER_RAW)
+        RoseChat plugin = RoseChat.getInstance();
+        if (plugin.getStaffService() == null)
+            return;
+
+        UUID eventId = message.getUUID();
+        UUID senderId = message.getSender().getUUID();
+        String plainText = message.getPlayerInput();
+        String displayName = message.getSender().getRealName();
+        if (displayName == null || displayName.isBlank())
+            displayName = message.getSender().getName();
+
+        if (eventId == null || senderId == null || plainText == null
+                || displayName == null || displayName.isBlank())
+            return;
+
+        ChannelClassification classification = plugin.getStaffService().classifyChannel(this.getId());
+        String resolvedDisplayName = displayName;
+        if (plugin.getOutboundChatRenderBridgeRuntime().installed()) {
+            try {
+                RoseChat.MESSAGE_THREAD_POOL.execute(() -> this.publishRenderedOrFallback(
+                        plugin,
+                        message,
+                        eventId,
+                        senderId,
+                        resolvedDisplayName,
+                        plainText,
+                        lineFormat,
+                        classification
+                ));
+                return;
+            } catch (RuntimeException failure) {
+                // Renderer scheduling is best-effort; fall through to the existing plain bridge.
+            }
+        }
+
+        this.publishPlainOutbound(
+                plugin,
+                eventId,
+                senderId,
+                resolvedDisplayName,
+                plainText,
+                classification
+        );
+    }
+
+    private void publishRenderedOrFallback(
+            RoseChat plugin,
+            RoseMessage message,
+            UUID eventId,
+            UUID senderId,
+            String displayName,
+            String canonicalPlainText,
+            String lineFormat,
+            ChannelClassification classification
+    ) {
+        try {
+            MessageContents body = message.parseMessageForDiscordTransport(
+                    message.getSender(),
+                    "{message}"
+            );
+            MessageContents line = message.parseMessageForDiscordTransport(
+                    message.getSender(),
+                    lineFormat == null ? "{message}" : lineFormat
+            );
+
+            OutboundChatRenderBridgeCoordinator.DispatchResult result =
+                    plugin.getOutboundChatRenderBridgeRuntime().publish(
+                            eventId,
+                            senderId,
+                            displayName,
+                            canonicalPlainText,
+                            this.getId(),
+                            classification,
+                            body.build(ChatComposer.plain()),
+                            body.build(ChatComposer.markdown()),
+                            body.build(ChatComposer.json()),
+                            line.build(ChatComposer.plain()),
+                            line.build(ChatComposer.markdown()),
+                            line.build(ChatComposer.json())
+                    );
+
+            if (result != OutboundChatRenderBridgeCoordinator.DispatchResult.NO_BRIDGE
+                    && result != OutboundChatRenderBridgeCoordinator.DispatchResult.BACKPRESSURE
+                    && result != OutboundChatRenderBridgeCoordinator.DispatchResult.FAILED) {
+                return;
+            }
+        } catch (RuntimeException failure) {
+            // Styled Discord rendering is optional; plain V1 remains the migration fallback.
+        }
+
+        this.publishPlainOutbound(
+                plugin,
+                eventId,
+                senderId,
+                displayName,
+                canonicalPlainText,
+                classification
+        );
+    }
+
+    private void publishPlainOutbound(
+            RoseChat plugin,
+            UUID eventId,
+            UUID senderId,
+            String displayName,
+            String plainText,
+            ChannelClassification classification
+    ) {
+        plugin.getOutboundChatBridgeRuntime().publish(
+                eventId,
+                senderId,
+                displayName,
+                plainText,
+                this.getId(),
+                classification
+        );
+    }
+
+    static boolean shouldPublishOutboundBridge(
+            MessageDirection direction,
+            boolean sendNetworkMessagesToDiscord
+    ) {
+        return direction == MessageDirection.PLAYER_TO_SERVER
+                || (direction == MessageDirection.SERVER_TO_SERVER && sendNetworkMessagesToDiscord);
+    }
+
+    private void sendToDiscord(RoseMessage message, MessageDirection direction) {
+        if (!shouldSendLegacyDiscord(
+                RoseChat.getInstance().getLegacyDiscordChatSuppression().suppressed(),
+                direction,
+                this.getSettings().shouldSendBungeeToDiscord()))
             return;
 
         RoseChatAPI api = RoseChatAPI.getInstance();
@@ -369,6 +505,19 @@ public class RoseChatChannel extends ConditionalChannel implements Spyable {
 
         RoseChat.MESSAGE_THREAD_POOL.execute(() ->
                 api.getDiscord().sendMessage(message, this, this.getSettings().getDiscord()));
+    }
+
+    static boolean shouldSendLegacyDiscord(
+            boolean suppressed,
+            MessageDirection direction,
+            boolean sendNetworkMessagesToDiscord
+    ) {
+        if (suppressed || direction == null)
+            return false;
+        if (direction == MessageDirection.SERVER_TO_SERVER)
+            return sendNetworkMessagesToDiscord;
+        return direction != MessageDirection.DISCORD_TO_MINECRAFT
+                && direction != MessageDirection.SERVER_TO_SERVER_RAW;
     }
 
     private void sendToBungee(RoseMessage message, MessageDirection direction) {
@@ -558,6 +707,7 @@ public class RoseChatChannel extends ConditionalChannel implements Spyable {
         // Disable spam filter for further messages.
         rules.ignoreMessageLogging();
 
+        this.publishToOutboundBridge(message, direction, format);
         this.sendToDiscord(message, direction);
         this.sendToBungee(message, direction);
 
@@ -582,8 +732,9 @@ public class RoseChatChannel extends ConditionalChannel implements Spyable {
         staff.allowDiscordPreflight(message.getSender(), this.getId(), input).thenAccept(allowed -> {
             if (!allowed || !plugin.isEnabled())
                 return;
-            // Never run parsing/delivery on the Staff storage worker or timeout thread.
-            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            // Recipient enumeration and console events belong to the server thread.
+            // Per-recipient parsing retains its existing internal worker dispatch.
+            Bukkit.getScheduler().runTask(plugin, () -> {
                 if (plugin.isEnabled() && plugin.getStaffService() == staff
                         && staff.moderationRevision() == revision)
                     this.send(options, message, MessageDirection.DISCORD_TO_MINECRAFT, new MessageRules());

@@ -3,6 +3,8 @@ package dev.rosewood.rosechat.staff;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.rosewood.rosechat.api.staff.MessageSurface;
 import dev.rosewood.rosechat.api.staff.ModerationDecision;
@@ -13,12 +15,46 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 
 class DiscordMutePreflightTest {
     private static final TransmissionContext CONTEXT = new TransmissionContext(
             new UUID(0, 42), "Offline", MessageSurface.CHANNEL, "global", "hello");
+
+    @Test
+    void registrationRemovalCannotInterleaveWithLockedInstallation() throws Exception {
+        var coordinator = coordinator();
+        var registration = coordinator.install("Staff", channels(), new RoseChatModerationBridge() { });
+        var executor = Executors.newSingleThreadExecutor();
+        var entered = new CountDownLatch(1);
+        try {
+            java.util.concurrent.Future<?> close;
+            long initial = coordinator.revision();
+            synchronized (coordinator) {
+                close = executor.submit(() -> {
+                    entered.countDown();
+                    registration.close();
+                });
+                assertTrue(entered.await(2, TimeUnit.SECONDS));
+                assertThrows(TimeoutException.class, () -> close.get(100, TimeUnit.MILLISECONDS));
+                assertTrue(registration.isActive());
+                assertEquals(initial, coordinator.revision());
+            }
+            close.get(2, TimeUnit.SECONDS);
+            assertEquals(initial + 1, coordinator.revision());
+            var replacement = coordinator.install("replacement", channels(), new RoseChatModerationBridge() { });
+            registration.close();
+            assertTrue(replacement.isActive());
+            assertEquals(initial + 2, coordinator.revision());
+        } finally {
+            executor.shutdownNow();
+        }
+    }
 
     @Test
     void waitsForAuthoritativeOfflineDecisionInsteadOfUsingOnlineCache() {

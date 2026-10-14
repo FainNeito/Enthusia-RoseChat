@@ -285,8 +285,10 @@ final class StaffBridgeCoordinator implements AutoCloseable {
 
         @Override
         public void close() {
-            if (StaffBridgeCoordinator.this.installed.compareAndSet(this.bridge, null))
-                StaffBridgeCoordinator.this.revision.incrementAndGet();
+            synchronized (StaffBridgeCoordinator.this) {
+                if (StaffBridgeCoordinator.this.installed.compareAndSet(this.bridge, null))
+                    StaffBridgeCoordinator.this.revision.incrementAndGet();
+            }
         }
     }
 }

@@ -1,6 +1,11 @@
 package dev.rosewood.rosechat;
 
 import dev.rosewood.rosechat.api.RoseChatAPI;
+import dev.rosewood.rosechat.api.chatbridge.LegacyDiscordChatSuppression;
+import dev.rosewood.rosechat.api.chatbridge.OutboundChatBridgeCoordinator;
+import dev.rosewood.rosechat.api.chatbridge.OutboundChatBridgeRuntime;
+import dev.rosewood.rosechat.api.chatbridge.OutboundChatRenderBridgeCoordinator;
+import dev.rosewood.rosechat.api.chatbridge.OutboundChatRenderBridgeRuntime;
 import dev.rosewood.rosechat.api.staff.RoseChatStaffService;
 import dev.rosewood.rosechat.chat.log.ConsoleMessageLog;
 import dev.rosewood.rosechat.chat.task.ChatLogTask;
@@ -78,6 +83,14 @@ public class RoseChat extends RosePlugin {
     private ChatLogTask chatLogTask;
     private RoseChatStaffServiceImpl staffService;
     private AiModerationManager aiModerationManager;
+    private final LegacyDiscordChatSuppression legacyDiscordChatSuppression =
+            new LegacyDiscordChatSuppression();
+    private final OutboundChatBridgeCoordinator outboundChatBridgeCoordinator = new OutboundChatBridgeCoordinator();
+    private final OutboundChatBridgeRuntime outboundChatBridgeRuntime = new OutboundChatBridgeRuntime(this.outboundChatBridgeCoordinator);
+    private final OutboundChatRenderBridgeCoordinator outboundChatRenderBridgeCoordinator =
+            new OutboundChatRenderBridgeCoordinator();
+    private final OutboundChatRenderBridgeRuntime outboundChatRenderBridgeRuntime =
+            new OutboundChatRenderBridgeRuntime(this.outboundChatRenderBridgeCoordinator);
 
     public RoseChat() {
         super(-1, 5608,
@@ -185,6 +198,10 @@ public class RoseChat extends RosePlugin {
 
     @Override
     public void disable() {
+        this.legacyDiscordChatSuppression.close();
+        this.outboundChatRenderBridgeCoordinator.close();
+        this.outboundChatBridgeCoordinator.close();
+
         if (this.aiModerationManager != null) {
             this.aiModerationManager.close();
             this.aiModerationManager = null;
@@ -314,6 +331,26 @@ public class RoseChat extends RosePlugin {
 
     public AiModerationManager getAiModerationManager() {
         return this.aiModerationManager;
+    }
+
+    public LegacyDiscordChatSuppression getLegacyDiscordChatSuppression() {
+        return this.legacyDiscordChatSuppression;
+    }
+
+    public OutboundChatBridgeCoordinator getOutboundChatBridgeCoordinator() {
+        return this.outboundChatBridgeCoordinator;
+    }
+
+    public OutboundChatBridgeRuntime getOutboundChatBridgeRuntime() {
+        return this.outboundChatBridgeRuntime;
+    }
+
+    public OutboundChatRenderBridgeCoordinator getOutboundChatRenderBridgeCoordinator() {
+        return this.outboundChatRenderBridgeCoordinator;
+    }
+
+    public OutboundChatRenderBridgeRuntime getOutboundChatRenderBridgeRuntime() {
+        return this.outboundChatRenderBridgeRuntime;
     }
 
     @Override

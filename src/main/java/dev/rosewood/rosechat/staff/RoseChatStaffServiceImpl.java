@@ -209,7 +209,7 @@ public final class RoseChatStaffServiceImpl implements RoseChatStaffService, Aut
                 senderId, safeName(sender), MessageSurface.CHANNEL, channelId, message
         )).thenApplyAsync(decision -> this.plugin.isEnabled() && this.bridge.revision() == revision
                 && this.applyDecision(decision, sender, message, channelId, MessageSurface.CHANNEL, false),
-                action -> Bukkit.getScheduler().runTaskAsynchronously(this.plugin, action));
+                action -> Bukkit.getScheduler().runTask(this.plugin, action));
     }
 
     public long moderationRevision() {
